@@ -1,0 +1,92 @@
+GPUS: (0,1,2,3)
+LOG_DIR: 'log/'
+DATA_DIR: ''
+OUTPUT_DIR: 'output/'
+WORKERS: 4
+PRINT_FREQ: 20
+COMMENT: 'Experiment_CelebA_GEM'
+
+MODEL: 
+  NAME: mdeq
+  NUM_LAYERS: 10
+  NUM_GROUPS: 8
+  DROPOUT: 0.3
+  F_THRES: 18
+  B_THRES: 20
+  WNORM: true
+  GNORM: true
+  DOWNSAMPLE_TIMES: 0
+  EXPANSION_FACTOR: 5
+  OUTPUT_NL: 'tanh'
+  MEM: 40
+  TRAJ_REG: true
+  JIIO_THRES: 100
+  EPSILON: 0.5
+  ALPHA_0:
+    - 0.01
+    - 0.003
+  IMAGE_SIZE: 
+    - 3
+    - 64
+    - 64
+  EXTRA:
+    FULL_STAGE:
+      NUM_MODULES: 1
+      NUM_BRANCHES: 4
+      BLOCK: BASIC
+      HEAD_CHANNELS:
+      - 14
+      - 28
+      - 56
+      - 112
+      FINAL_CHANSIZE: 1680
+      NUM_BLOCKS:
+      - 1
+      - 1
+      - 1
+      - 1
+      NUM_CHANNELS:
+      - 32
+      - 64
+      - 128
+      - 256
+      FUSE_METHOD: SUM
+      ENCODING_CHANNELS: 128
+    FULL_BWD: false
+CUDNN:
+  BENCHMARK: true
+  DETERMINISTIC: false
+  ENABLED: true
+DATASET:
+  DATASET: 'celeba'
+  DATA_FORMAT: 'jpg'
+  ROOT: '/project_data/projects/swamig/data/'
+  TEST_SET: 'val'
+  TRAIN_SET: 'train'
+  AUGMENT: true
+TEST:
+  BATCH_SIZE_PER_GPU: 12
+  MODEL_FILE: ''
+TRAIN:
+  TRAIN_VAE: false
+  INV_PROB : 'reconstruction'
+  JAC_COEFF : 2.0
+  BATCH_SIZE_PER_GPU: 12
+  BEGIN_EPOCH: 0
+  END_EPOCH: 220
+  RESUME: true
+  LR_SCHEDULER: 'cosine'
+  PRETRAIN_STEPS: 20000
+  LR_FACTOR: 0.1
+  LR_STEP:
+  - 30
+  - 60
+  - 90
+  OPTIMIZER: adam
+  LR: 0.001
+  WD: 0.0
+  MOMENTUM: 0.9
+  NESTEROV: true
+  SHUFFLE: true
+DEBUG:
+  DEBUG: false

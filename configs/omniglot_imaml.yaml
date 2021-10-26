@@ -1,0 +1,92 @@
+GPUS: (0,1,2,3)
+LOG_DIR: 'log/'
+DATA_DIR: ''
+OUTPUT_DIR: 'output/'
+WORKERS: 4
+PRINT_FREQ: 40
+COMMENT: 'EXPERIMENT_META_OMNIGLOT'
+RANK: 0
+
+MODEL: 
+  NAME: mdeq
+  NUM_LAYERS: 10
+  NUM_GROUPS: 8
+  DROPOUT: 0.
+  F_THRES: 18
+  B_THRES: 20
+  WNORM: true
+  GNORM: true
+  DOWNSAMPLE_TIMES: 0
+  EXPANSION_FACTOR: 5
+  OUTPUT_NL: 'softmax'
+  MEM: 10
+  PROJ_GD: false
+  TRAJ_REG: true
+  JIIO_THRES: 100
+  EPSILON: 0.5
+  ALPHA_0:
+    - 0.04
+    - 0.01
+  IMAGE_SIZE: 
+    - 1
+    - 28
+    - 28
+  EXTRA:
+    FULL_STAGE:
+      NUM_MODULES: 1
+      NUM_BRANCHES: 2
+      BLOCK: MetaBASIC
+      HEAD_CHANNELS:
+      - 32
+      - 64
+      FINAL_CHANSIZE: 512
+      NUM_BLOCKS:
+      - 1
+      - 1
+      NUM_CHANNELS:
+      - 64
+      - 128
+      FUSE_METHOD: SUM
+      ENCODING_CHANNELS: 400
+CUDNN:
+  BENCHMARK: true
+  DETERMINISTIC: false
+  ENABLED: true
+DATASET:
+  DATASET: 'omniglot'
+  DATA_FORMAT: 'jpg'
+  ROOT: '/home/sgurumur/swami_stuff/omniglot/data/'
+  TEST_SET: 'val'
+  TRAIN_SET: 'train'
+  AUGMENT: false
+TEST:
+  BATCH_SIZE_PER_GPU: 20
+  # MODEL_FILE: 'output/omniglot/omniglot_imaml/conv_train_jc05_film1_encchen400_vreg1_gpus4_jointopt_bwdte_br2_vsplit_m10_final2_goodanderson/checkpoint1000.pth.tar'
+TRAIN:
+  JAC_COEFF : 0.5
+  BATCH_SIZE_PER_GPU: 20
+  BEGIN_EPOCH: 0
+  END_EPOCH: 10
+  RESUME: true
+  LR_SCHEDULER: 'cosine'
+  PRETRAIN_STEPS: 20000
+  LR_FACTOR: 0.1
+  LR_STEP:
+  - 30
+  - 60
+  - 90
+  OPTIMIZER: adam
+  LR: 0.001
+  WD: 0.0
+  MOMENTUM: 0.9
+  NESTEROV: true
+  SHUFFLE: true
+IMAML:
+  N_WAY: 5
+  K_SHOT: 1
+  META_STEPS: 20000
+  NUM_TASKS: 2000000
+  NUM_TEST_TASKS: 600
+  LOAD_TASKS: /home/sgurumur/swami_stuff/omniglot/task_defs/Omniglot_5_way_1_shot.pickle
+DEBUG:
+  DEBUG: false

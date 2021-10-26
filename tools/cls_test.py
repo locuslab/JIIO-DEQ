@@ -1,0 +1,206 @@
+# Modified based on the HRNet repo.
+
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+import argparse
+import os
+import pprint
+import shutil
+import sys
+
+import torch
+import torch.nn as nn
+import torch.nn.parallel
+import torch.backends.cudnn as cudnn
+import torch.optim
+import torch.utils.data
+import torch.utils.data.distributed
+import torchvision.datasets as datasets
+import torchvision.transforms as transforms
+from tensorboardX import SummaryWriter
+
+import _init_paths
+import models
+from config import config
+from config import update_config
+from core.cls_function import train, validate, validate_proj, timing_experiments
+from utils.modelsummary import get_model_summary
+from utils.utils import get_optimizer
+from utils.utils import save_checkpoint
+from utils.utils import create_logger
+from termcolor import colored
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train classification network')
+    
+    parser.add_argument('--cfg',
+                        help='experiment configure file name',
+                        required=True,
+                        type=str)
+
+    parser.add_argument('--modelDir',
+                        help='model directory',
+                        type=str,
+                        default='')
+    parser.add_argument('--logDir',
+                        help='log directory',
+                        type=str,
+                        default='')
+    parser.add_argument('--dataDir',
+                        help='data directory',
+                        type=str,
+                        default='')
+    parser.add_argument('--testModel',
+                        help='testModel',
+                        type=str,
+                        default='')
+    parser.add_argument('--percent',
+                        help='percentage of training data to use',
+                        type=float,
+                        default=1.0)
+    parser.add_argument('opts',
+                        help="Modify config options using the command-line",
+                        default=None,
+                        nargs=argparse.REMAINDER)
+
+    args = parser.parse_args()
+    update_config(config, args)
+
+    return args
+
+def main():
+    args = parse_args()
+    print(colored("Setting default tensor type to cuda.FloatTensor", "cyan"))
+    torch.multiprocessing.set_start_method('spawn')
+    torch.set_default_tensor_type('torch.cuda.FloatTensor')
+
+    logger, final_output_dir, tb_log_dir = create_logger(
+        config, args.cfg, 'train')
+
+    logger.info(pprint.pformat(args))
+    logger.info(pprint.pformat(config))
+
+    # cudnn related setting
+    cudnn.benchmark = config.CUDNN.BENCHMARK
+    torch.backends.cudnn.deterministic = config.CUDNN.DETERMINISTIC
+    torch.backends.cudnn.enabled = config.CUDNN.ENABLED
+    
+    model = eval('models.'+config.MODEL.NAME+'.get_robust_cls_net')(config).cuda()
+
+    dump_input = torch.rand(config.TRAIN.BATCH_SIZE_PER_GPU, config.MODEL.IMAGE_SIZE[0], config.MODEL.IMAGE_SIZE[1], config.MODEL.IMAGE_SIZE[2]).cuda()
+    dump_inputy = torch.randint(10, size=(config.TRAIN.BATCH_SIZE_PER_GPU,1)).long().cuda()
+    
+    if True:
+        load_file = config.TEST.MODEL_FILE 
+        if load_file:
+            model.load_state_dict(torch.load(load_file))
+            logger.info(colored('=> loading model from {}'.format(load_file), 'red'))
+
+        writer_dict = None
+
+        gpus = list(config.GPUS)
+        model = nn.DataParallel(model, device_ids=gpus).cuda()
+        print("Finished constructing model!")
+
+        # define loss function (criterion) and optimizer
+        criterion = nn.CrossEntropyLoss().cuda()
+
+        optimizer = get_optimizer(config, model)
+        lr_scheduler = None
+
+        best_perf = 0.0
+        best_model = False
+        last_epoch = config.TRAIN.BEGIN_EPOCH
+
+        # Data loading code
+        dataset_name = config.DATASET.DATASET
+
+        if dataset_name == 'imagenet':
+            traindir = os.path.join(config.DATASET.ROOT+'/images', config.DATASET.TRAIN_SET)
+            valdir = os.path.join(config.DATASET.ROOT+'/images', config.DATASET.TEST_SET)
+            normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transform_train = transforms.Compose([
+                transforms.RandomResizedCrop(config.MODEL.IMAGE_SIZE[0]),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+            ])
+            transform_valid = transforms.Compose([
+                transforms.Resize(int(config.MODEL.IMAGE_SIZE[0] / 0.875)),
+                transforms.CenterCrop(config.MODEL.IMAGE_SIZE[0]),
+                transforms.ToTensor(),
+                normalize,
+            ])
+            train_dataset = datasets.ImageFolder(traindir, transform_train)
+            valid_dataset = datasets.ImageFolder(valdir, transform_valid)
+        elif dataset_name == "cifar10":
+            assert dataset_name == "cifar10", "Only CIFAR-10 is supported at this phase"
+            classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')  # For reference
+            
+            # normalize = transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+            augment_list = [transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip()] if config.DATASET.AUGMENT else []
+            transform_train = transforms.Compose(augment_list + [
+                transforms.ToTensor(),
+                # normalize,
+            ])
+            transform_valid = transforms.Compose([
+                transforms.ToTensor(),
+                # normalize,
+            ])
+            train_dataset = datasets.CIFAR10(root=f'{config.DATASET.ROOT}', train=True, download=True, transform=transform_train)
+            valid_dataset = datasets.CIFAR10(root=f'{config.DATASET.ROOT}', train=False, download=True, transform=transform_valid)
+        elif dataset_name == "mnist":
+            transform_train = transforms.Compose([
+                transforms.Resize((28, 28)),
+                transforms.ToTensor(),
+            ])
+            train_dataset = datasets.MNIST(root=f'{config.DATASET.ROOT}', train=True, download=True, transform=transform_train)
+            valid_dataset = datasets.MNIST(root=f'{config.DATASET.ROOT}', train=False, download=True, transform=transform_train)
+        
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset,
+            batch_size=config.TRAIN.BATCH_SIZE_PER_GPU*len(gpus),
+            shuffle=True,
+            num_workers=config.WORKERS,
+            pin_memory=True
+        )
+        valid_loader = torch.utils.data.DataLoader(
+            valid_dataset,
+            batch_size=config.TEST.BATCH_SIZE_PER_GPU*len(gpus),
+            shuffle=False,
+            num_workers=config.WORKERS,
+            pin_memory=True
+        )
+        
+        # Learning rate scheduler
+        if lr_scheduler is None:
+            if config.TRAIN.LR_SCHEDULER != 'step':
+                lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer, len(train_loader)*config.TRAIN.END_EPOCH, eta_min=1e-6)
+            elif isinstance(config.TRAIN.LR_STEP, list):
+                lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                    optimizer, config.TRAIN.LR_STEP, config.TRAIN.LR_FACTOR,
+                    last_epoch-1)
+            else:
+                lr_scheduler = torch.optim.lr_scheduler.StepLR(
+                    optimizer, config.TRAIN.LR_STEP, config.TRAIN.LR_FACTOR,
+                    last_epoch-1)
+
+        epoch = 0
+        topk = (1,5) if dataset_name == 'imagenet' else (1,)
+
+        # evaluate on validation set
+        if not config.MODEL.PROJ_GD:
+            perf_indicator = validate(config, valid_loader, model, criterion, lr_scheduler, epoch,
+                                      final_output_dir, tb_log_dir, writer_dict, topk=topk)
+        else:
+            perf_indicator = validate_proj(config, valid_loader, model, criterion, lr_scheduler, epoch,
+                                      final_output_dir, tb_log_dir, writer_dict, topk=topk)
+        # perf_indicator = timing_experiments(config, valid_loader, model, criterion, lr_scheduler, epoch,
+        #                           final_output_dir, tb_log_dir, writer_dict, topk=topk)
+        torch.cuda.empty_cache()
+if __name__ == '__main__':
+    main()
